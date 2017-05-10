@@ -308,14 +308,9 @@ class FixedHttp2ConnectionDecoder implements Http2ConnectionDecoder {
                             stream.state());
             }
 
-            try {
-                // This call will create a stream for streamDependency if necessary.
-                // For this reason it must be done before notifying the listener.
-                stream.setPriority(streamDependency, weight, exclusive);
-            } catch (ClosedStreamCreationException ignored) {
-                // It is possible that either the stream for this frame or the parent stream is closed.
-                // In this case we should ignore the exception and allow the frame to be sent.
-            }
+            // This call will create a stream for streamDependency if necessary.
+            // For this reason it must be done before notifying the listener.
+            setPriority(stream, streamDependency, weight, exclusive);
 
             listener.onHeadersRead(ctx, streamId, headers, streamDependency, weight, exclusive, padding, endOfStream);
 
@@ -340,7 +335,7 @@ class FixedHttp2ConnectionDecoder implements Http2ConnectionDecoder {
 
                     // PRIORITY frames always identify a stream. This means that if a PRIORITY frame is the
                     // first frame to be received for a stream that we must create the stream.
-                    stream = connection.remote().createIdleStream(streamId);
+                    stream = connection.remote().createStream(streamId, false);
                 } else if (streamCreatedAfterGoAwaySent(streamId)) {
                     logger.info("{} ignoring PRIORITY frame for stream {}. Stream created after GOAWAY sent. " +
                                     "Last known stream by peer {}",
@@ -350,7 +345,7 @@ class FixedHttp2ConnectionDecoder implements Http2ConnectionDecoder {
 
                 // This call will create a stream for streamDependency if necessary.
                 // For this reason it must be done before notifying the listener.
-                stream.setPriority(streamDependency, weight, exclusive);
+                setPriority(stream, streamDependency, weight, exclusive);
             } catch (ClosedStreamCreationException ignored) {
                 // It is possible that either the stream for this frame or the parent stream is closed.
                 // In this case we should ignore the exception and allow the frame to be sent.
@@ -413,7 +408,7 @@ class FixedHttp2ConnectionDecoder implements Http2ConnectionDecoder {
             Long maxConcurrentStreams = settings.maxConcurrentStreams();
             if (maxConcurrentStreams != null) {
                 int value = (int) min(maxConcurrentStreams, MAX_VALUE);
-                connection.remote().maxStreams(value, calculateMaxStreams(value));
+                connection.remote().maxActiveStreams(calculateMaxStreams(value));
             }
 
             Long headerTableSize = settings.headerTableSize();
@@ -438,10 +433,10 @@ class FixedHttp2ConnectionDecoder implements Http2ConnectionDecoder {
         }
 
         /**
-         * Calculate the {@code maxStreams} parameter for the {@link Endpoint#maxStreams(int, int)} method based upon
+         * Calculate the {@code maxStreams} parameter for the {@link Endpoint#maxActiveStreams(int, int)} method based upon
          * {@code SETTINGS_MAX_CONCURRENT_STREAMS}.
          * @param maxConcurrentStreams {@code SETTINGS_MAX_CONCURRENT_STREAMS}.
-         * @return the {@code maxStreams} parameter for the {@link Endpoint#maxStreams(int, int)} method.
+         * @return the {@code maxStreams} parameter for the {@link Endpoint#maxActiveStreams(int, int)} method.
          */
         private int calculateMaxStreams(int maxConcurrentStreams) {
             int maxStreams = maxConcurrentStreams + SMALLEST_MAX_CONCURRENT_STREAMS;
@@ -603,6 +598,10 @@ class FixedHttp2ConnectionDecoder implements Http2ConnectionDecoder {
             if (!connection.streamMayHaveExisted(streamId)) {
                 throw connectionError(PROTOCOL_ERROR, "Stream %d does not exist", streamId);
             }
+        }
+
+        private void setPriority(Http2Stream stream, int streamDependency, short weight, boolean exclusive) {
+            connection.remote().flowController().updateDependencyTree(stream.id(), streamDependency, weight, exclusive);
         }
     }
 
